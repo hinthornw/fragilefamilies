@@ -1,14 +1,16 @@
 import pandas as pd
 import numpy as np
+import getopt
+import sys, time
 
-#hi2
+
 def fillMissing(inputcsv, outputcsv):
-    
+
     # read input csv - takes time
     df = pd.read_csv(inputcsv, low_memory=False)
     # Fix date bug
     df.cf4fint = ((pd.to_datetime(df.cf4fint) - pd.to_datetime('1960-01-01')) / np.timedelta64(1, 'D')).astype(int)
-    
+
     # replace NA's with mode
     df = df.fillna(df.mode().iloc[0])
     # if still NA, replace with 1
@@ -18,7 +20,49 @@ def fillMissing(inputcsv, outputcsv):
     num[num < 0] = 1
     # write filled outputcsv
     df.to_csv(outputcsv, index=False)
-    
-# Usage:
-fillMissing('background.csv', 'output.csv')
-filleddf = pd.read_csv('output.csv', low_memory=False)
+
+# # Usage:
+# fillMissing('background.csv', 'output.csv')
+# filleddf = pd.read_csv('output.csv', low_memory=False)
+#
+
+def main(argv):
+    start_time = time.time()
+
+    path = './'
+    outputf = 'output.csv'
+    inputf = 'background.csv'
+    usage_message = 'Usage: \n python MissingDataScript.py -p <path> -i <inputfile> -o <outputfile>'
+
+    try:
+        opts, args = getopt.getopt(argv, "p:i:o:",
+                                   ["path=", "ofile="])
+    except getopt.GetoptError:
+        print usage_message
+        sys.exit(2)
+    for opt, arg in opts:
+        if opt == '-h':
+            print usage_message
+            sys.exit()
+        elif opt in ("-p", "--path"):
+            path = arg
+        elif opt in ("-i", "--ifile"):
+            inputf = arg
+        elif opt in ("-o", "--ofile"):
+            outputf = arg
+
+    print 'Path:', path
+    print 'Imputing values.'
+
+    #Fill Missing Values
+    infile = open(path + "/" + inputf, 'r')
+    outfile = open(path + "/" + "imputed_" + outputf, 'w')
+    fillMissing(infile, outfile)
+
+    print 'Output files:', path + "/" + outputf + "*"
+
+    # Runtime
+    print 'Runtime:', str(time.time() - start_time)
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
