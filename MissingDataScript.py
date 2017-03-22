@@ -40,7 +40,6 @@ def main(argv):
     outputf = 'output.csv'
     inputf = 'background.csv'
     usage_message = 'Usage: \n python MissingDataScript.py -p <path> -i <inputfile> -o <outputfile>'
-    split = false
     try:
         opts, args = getopt.getopt(argv, "p:i:o:",
                                    ["path=", "ofile="])
@@ -57,8 +56,7 @@ def main(argv):
             inputf = arg
         elif opt in ("-o", "--ofile"):
             outputf = arg
-        elif opt in ("-s", "--split"):
-            split = true
+
 
     print 'Path:', path
     print 'Imputing values.'
@@ -66,8 +64,7 @@ def main(argv):
     #Fill Missing Values
     infile = open(path + "/" + inputf, 'r')
     outfile = open(path + "/" + "imputed_" + outputf, 'w')
-    outfile_val
-    fillMissing(infile, outfile, split)
+    fillMissing(infile, outfile)
 
     print 'Output files:', path + "/" + outputf + "*"
 

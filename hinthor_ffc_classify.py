@@ -133,6 +133,7 @@ def main(argv):
     train_outcomes = pd.read_csv(oc, low_memory=False)
 
     #Select only challengeid's in train_outcomes
+    # drop all rows in background.csv that are not in train.csv
 
 
 
