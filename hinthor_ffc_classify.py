@@ -150,13 +150,19 @@ def main(argv):
     train_background, train_outcomes = select(train_background, train_outcomes, train_label)
 
     reg = linear_model.Ridge(alpha = .5)
-    # print "background"
-    # print np.array(train_background)[:, :]
-    # print "Training"
-    # print np.array(train_outcomes)[:, :]
-    reg.fit(np.array(train_background)[:, 1:], np.array(train_outcomes)[:, 1:])
-    reg.coef_
-    reg.intercept_
+    lasso = linear_model.Lasso()
+    #reg.fit(np.array(train_background)[:, 1:], np.array(train_outcomes)[:, 1:])
+    cross_val = cross_val_score(reg, np.array(train_background)[:, 1:], np.array(train_outcomes)[:, 1:], cv=5)
+    print 'Reg: \tcvs accuracy: %0.2f (+/- %0.2f) ' % (cross_val.mean(), cross_val.std() * 2)  # mean & 95% conf interval for k-folds
+    print cross_val_score
+    cross_val = cross_val_score(lasso, np.array(train_background)[:, 1:], np.array(train_outcomes)[:, 1:], cv=5)
+    print 'Lasso: \tcvs accuracy: %0.2f (+/- %0.2f) ' % (cross_val.mean(), cross_val.std() * 2)  # mean & 95% conf interval for k-folds
+    print cross_val_score
+    # # print "background"
+    # # print np.array(train_background)[:, :]
+    # # print "Training"
+    # # print np.array(train_outcomes)[:, :]
+    # reg.fit(np.array(train_background)[:, 1:], np.array(train_outcomes)[:, 1:])
 
 
 

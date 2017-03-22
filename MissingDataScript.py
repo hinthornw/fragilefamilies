@@ -6,14 +6,19 @@ import sys, time
 
 def fillMissing(inputcsv, outputcsv):
 
+    #handpick some columns that we will drop
+    cols_to_kill = ['hv4j5a_ot']
     # read input csv - takes time
     df = pd.read_csv(inputcsv, low_memory=False)
     # Fix date bug
     df.cf4fint = ((pd.to_datetime(df.cf4fint) - pd.to_datetime('1960-01-01')) / np.timedelta64(1, 'D')).astype(int)
 
+    #Kill handpicked columns
+
+    df.drop(cols_to_kill, inplace=True, axis=1)
     #Threshold columns to remove too many NAs
     value = 2000
-    cols_to_drop =  df.isnull().sum() < value
+    cols_to_drop =  df.isnull().sum() > value
     df.drop(cols_to_drop.loc[cols_to_drop].index, axis=1, inplace=True)
 
     # replace NA's with mode
@@ -28,11 +33,16 @@ def fillMissing(inputcsv, outputcsv):
     cols_to_drop = nunique[nunique == 1].index
     df.drop(cols_to_drop, axis=1, inplace=True)
 
+    #Finally, drop all columns that aren't numeric
+
+
+
     # replace negative values with 1
     num = df._get_numeric_data()
     num[num < 0] = 1
     # write filled outputcsv
-    df.to_csv(outputcsv, index=False)
+    #df.to_csv(outputcsv, index=False)
+    num.to_csv(outputcsv, index=False)
 
 # # Usage:
 # fillMissing('background.csv', 'output.csv')
