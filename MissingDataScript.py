@@ -11,8 +11,14 @@ def fillMissing(inputcsv, outputcsv):
     # Fix date bug
     df.cf4fint = ((pd.to_datetime(df.cf4fint) - pd.to_datetime('1960-01-01')) / np.timedelta64(1, 'D')).astype(int)
 
+    #Threshold columns to remove too many NAs
+    value = 2000
+    cols_to_drop =  df.isnull().sum() < value
+    df.drop(cols_to_drop.loc[cols_to_drop].index, axis=1, inplace=True)
+
     # replace NA's with mode
     df = df.fillna(df.mode().iloc[0])
+
     # if still NA, delete
     df.dropna(axis=1, inplace=True)
     #df = df.fillna(value=1)

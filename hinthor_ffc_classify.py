@@ -18,82 +18,98 @@ from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier
 from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis
 from sklearn.pipeline import Pipeline
 from sklearn.feature_selection import SelectFromModel
-
+from sklearn import linear_model
 from sklearn import preprocessing
 import sys
 
-from preprocessSentences import read_bagofwords_dat, tokenize_corpus, find_wordcounts
+#
+# train_bow = []
+# train_classes = []
+# test_bow = []
+# test_classes = []
+# vocab = []
+# outputf = 'out'
+# feature_select = False
 
-train_bow = []
-train_classes = []
-test_bow = []
-test_classes = []
-vocab = []
-outputf = 'out'
-feature_select = False
+#
+# def eval_clf(clf, clf_type, num_folds):
+#     global train_bow, train_classes, test_bow, test_classes, vocab, outputf
+#
+#     # Fit classifier
+#     clf.fit(train_bow, train_classes)
+#
+#     cross_val = cross_val_score(clf, train_bow, train_classes, cv=num_folds)
+#     # Score classifier
+#     print clf_type
+#     print '\ttrain score: ' + str(clf.score(train_bow, train_classes))
+#     print '\ttest score: ' + str(clf.score(test_bow, test_classes))
+#     print '\tcvs accuracy: %0.2f (+/- %0.2f) ' % (
+#     cross_val.mean(), cross_val.std() * 2)  # mean & 95% conf interval for k-folds
+#     # Perform ROC calculations
+#     predictions = clf.predict(test_bow)
+#     (false_positive_rate, true_positive_rate, thresholds) = roc_curve(test_classes, predictions)
+#     roc_auc = auc(false_positive_rate, true_positive_rate)
+#
+#     # Create ROC plot
+#     plt.figure(1)
+#     plt.title('Receiver Operating Characteristic')
+#     plt.plot(false_positive_rate, true_positive_rate,
+#              label=clf_type + ' = {:0.2f}'.format(roc_auc))
+#     plt.legend(loc='lower right')
+#     plt.plot([0, 1], [0, 1], 'r--')
+#     plt.xlim([-0.1, 1.2])
+#     plt.ylim([-0.1, 1.2])
+#     plt.ylabel('True Positive Rate')
+#     plt.xlabel('False Positive Rate')
+#
+#     if clf_type == 'Logistic Regression':
+#         # Save important features for logit classifier
+#         if feature_select == False:
+#             clf_vocab = vocab
+#             clf_coef = clf.coef_[0]
+#         else:
+#             vocab_select = zip(vocab, clf.named_steps['feature_selection'].get_support())
+#             clf_vocab = [v for (v, s) in vocab_select if s]
+#             clf_coef = clf.named_steps['classification'].coef_[0]
+#         word_weights = zip(clf_vocab, clf_coef)
+#         word_weights.sort(key=lambda x: x[1])
+#         logit_coef_fname = ''
+#         if feature_select == False:
+#             logit_coef_fname = 'results/' + outputf + '_logit_coef.tsv'
+#         else:
+#             logit_coef_fname = 'results/' + outputf + '_feat_logit_coef.tsv'
+#         coef_file = open(logit_coef_fname, 'w')
+#         for word, weight in word_weights:
+#             coef_file.write('%s\t%f\n' % (word, weight))
+#         coef_file.close()
+#
+#         # Save important features from feature selection
+#         if feature_select:
+#             feat_coef = clf.named_steps['feature_selection'].estimator_.coef_[0]
+#             feat_vocab_coefs = zip(vocab, feat_coef)
+#             feat_vocab_coefs.sort(key=lambda x: x[1])
+#             top_feat_vocab_coefs = feat_vocab_coefs[:5] + feat_vocab_coefs[-5:]
+#             top_feat_vocab_coefs_file = open('results/' + outputf + '_feat_coef.tsv', 'w')
+#             for word, weight in top_feat_vocab_coefs:
+#                 top_feat_vocab_coefs_file.write('%s\t%f\n' % (word, weight))
+#             top_feat_vocab_coefs_file.close()
 
+def select(background, train, train_label):
+    '''train_label = e.g. materialHardship, eviction, all, etc.'''
+    if train_label == 'all':
+        subTrain = train
+        subTrain.dropna(axis=0, subset=['gpa', 'grit', 'materialHardship', 'eviction', 'layoff', 'jobTraining'], inplace=True, how='all')
+    else:
+        #subTrain = train[['challengeID', train_label]]
+        subTrain = train.loc[:, ('challengeID', train_label)]
+        subTrain.dropna(axis=0, subset=[train_label], inplace=True, how='all')
 
-def eval_clf(clf, clf_type, num_folds):
-    global train_bow, train_classes, test_bow, test_classes, vocab, outputf
-
-    # Fit classifier
-    clf.fit(train_bow, train_classes)
-
-    cross_val = cross_val_score(clf, train_bow, train_classes, cv=num_folds)
-    # Score classifier
-    print clf_type
-    print '\ttrain score: ' + str(clf.score(train_bow, train_classes))
-    print '\ttest score: ' + str(clf.score(test_bow, test_classes))
-    print '\tcvs accuracy: %0.2f (+/- %0.2f) ' % (
-    cross_val.mean(), cross_val.std() * 2)  # mean & 95% conf interval for k-folds
-    # Perform ROC calculations
-    predictions = clf.predict(test_bow)
-    (false_positive_rate, true_positive_rate, thresholds) = roc_curve(test_classes, predictions)
-    roc_auc = auc(false_positive_rate, true_positive_rate)
-
-    # Create ROC plot
-    plt.figure(1)
-    plt.title('Receiver Operating Characteristic')
-    plt.plot(false_positive_rate, true_positive_rate,
-             label=clf_type + ' = {:0.2f}'.format(roc_auc))
-    plt.legend(loc='lower right')
-    plt.plot([0, 1], [0, 1], 'r--')
-    plt.xlim([-0.1, 1.2])
-    plt.ylim([-0.1, 1.2])
-    plt.ylabel('True Positive Rate')
-    plt.xlabel('False Positive Rate')
-
-    if clf_type == 'Logistic Regression':
-        # Save important features for logit classifier
-        if feature_select == False:
-            clf_vocab = vocab
-            clf_coef = clf.coef_[0]
-        else:
-            vocab_select = zip(vocab, clf.named_steps['feature_selection'].get_support())
-            clf_vocab = [v for (v, s) in vocab_select if s]
-            clf_coef = clf.named_steps['classification'].coef_[0]
-        word_weights = zip(clf_vocab, clf_coef)
-        word_weights.sort(key=lambda x: x[1])
-        logit_coef_fname = ''
-        if feature_select == False:
-            logit_coef_fname = 'results/' + outputf + '_logit_coef.tsv'
-        else:
-            logit_coef_fname = 'results/' + outputf + '_feat_logit_coef.tsv'
-        coef_file = open(logit_coef_fname, 'w')
-        for word, weight in word_weights:
-            coef_file.write('%s\t%f\n' % (word, weight))
-        coef_file.close()
-
-        # Save important features from feature selection
-        if feature_select:
-            feat_coef = clf.named_steps['feature_selection'].estimator_.coef_[0]
-            feat_vocab_coefs = zip(vocab, feat_coef)
-            feat_vocab_coefs.sort(key=lambda x: x[1])
-            top_feat_vocab_coefs = feat_vocab_coefs[:5] + feat_vocab_coefs[-5:]
-            top_feat_vocab_coefs_file = open('results/' + outputf + '_feat_coef.tsv', 'w')
-            for word, weight in top_feat_vocab_coefs:
-                top_feat_vocab_coefs_file.write('%s\t%f\n' % (word, weight))
-            top_feat_vocab_coefs_file.close()
+    #subBackground = select x in backgroun s.t  background['idnum'] in subTrain['challengeID']
+    #select idnum in features that have a match in training labels
+    subBackground = background.loc[background['idnum'].isin(subTrain['challengeID'])]
+    #reverse check
+    subTrain = subTrain.loc[subTrain['challengeID'].isin(subBackground['idnum'])]
+    return subBackground, subTrain
 
 
 def main(argv):
@@ -101,10 +117,9 @@ def main(argv):
 
     # Process arguments
     path = ''
-    nf = 5
-    tfidf = False
-    usage_message = 'Usage: \n python classifySentiment.py -p <path> -w <wordcounthreshold> -f <feature>'
-
+    usage_message = 'Usage: \n python classifySentiment.py -p <path> -c <column> -f <feature>'
+    inputf = "output.csv"
+    train_label = 'gpa'
     try:
         opts, args = getopt.getopt(argv, "p:w:f:",
                                    ["path=", "wcthresh=", "feature="])
@@ -117,23 +132,31 @@ def main(argv):
             sys.exit()
         elif opt in ("-p", "--path"):
             path = arg
-        elif opt in ("-w", "--wcthresh"):
-            word_count_threshold = int(arg)
-        # elif opt in ("-d", "--data"):
-        #     traintxt_fname = arg
+        elif opt in ("-c", "--column"):
+            train_label = arg
         elif opt in ("-f", "--feature"):
             if arg == 'True':
                 feature_select = True
 
     # Get preprocessed data
-    bg = open(path + "/ffc/" + "imputed_" + inputf, 'r')
+    bg = open(path + "/" + "imputed_" + inputf, 'r')
     train_background = pd.read_csv(bg, low_memory=False)
 
-    oc =  open(path + "/ffc/prediction.csv", 'r')
+    oc =  open(path + "/train.csv", 'r')
     train_outcomes = pd.read_csv(oc, low_memory=False)
 
     #Select only challengeid's in train_outcomes
     # drop all rows in background.csv that are not in train.csv
+    train_background, train_outcomes = select(train_background, train_outcomes, train_label)
+
+    reg = linear_model.Ridge(alpha = .5)
+    # print "background"
+    # print np.array(train_background)[:, :]
+    # print "Training"
+    # print np.array(train_outcomes)[:, :]
+    reg.fit(np.array(train_background)[:, 1:], np.array(train_outcomes)[:, 1:])
+    reg.coef_
+    reg.intercept_
 
 
 
