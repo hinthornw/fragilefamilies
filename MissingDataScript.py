@@ -13,8 +13,15 @@ def fillMissing(inputcsv, outputcsv):
 
     # replace NA's with mode
     df = df.fillna(df.mode().iloc[0])
-    # if still NA, replace with 1
-    df = df.fillna(value=1)
+    # if still NA, delete
+    df = df.dropna(axis=1)
+    #df = df.fillna(value=1)
+    #Drop columns with no variance (number unique values is 1)
+    # from http://stackoverflow.com/questions/39658574/how-to-drop-columns-which-have-same-values-in-all-rows-via-pandas-or-spark-dataf
+    nunique = df.apply(pd.Series.nunique)
+    cols_to_drop = nunique[nunique == 1].index
+    df.drop(cols_to_drop, axis=1)
+
     # replace negative values with 1
     num = df._get_numeric_data()
     num[num < 0] = 1
@@ -33,7 +40,7 @@ def main(argv):
     outputf = 'output.csv'
     inputf = 'background.csv'
     usage_message = 'Usage: \n python MissingDataScript.py -p <path> -i <inputfile> -o <outputfile>'
-
+    split = false
     try:
         opts, args = getopt.getopt(argv, "p:i:o:",
                                    ["path=", "ofile="])
@@ -50,6 +57,8 @@ def main(argv):
             inputf = arg
         elif opt in ("-o", "--ofile"):
             outputf = arg
+        elif opt in ("-s", "--split"):
+            split = true
 
     print 'Path:', path
     print 'Imputing values.'
@@ -57,7 +66,8 @@ def main(argv):
     #Fill Missing Values
     infile = open(path + "/" + inputf, 'r')
     outfile = open(path + "/" + "imputed_" + outputf, 'w')
-    fillMissing(infile, outfile)
+    outfile_val
+    fillMissing(infile, outfile, split)
 
     print 'Output files:', path + "/" + outputf + "*"
 
