@@ -14,13 +14,13 @@ def fillMissing(inputcsv, outputcsv):
     # replace NA's with mode
     df = df.fillna(df.mode().iloc[0])
     # if still NA, delete
-    df = df.dropna(axis=1)
+    df.dropna(axis=1, inplace=True)
     #df = df.fillna(value=1)
     #Drop columns with no variance (number unique values is 1)
     # from http://stackoverflow.com/questions/39658574/how-to-drop-columns-which-have-same-values-in-all-rows-via-pandas-or-spark-dataf
     nunique = df.apply(pd.Series.nunique)
     cols_to_drop = nunique[nunique == 1].index
-    df.drop(cols_to_drop, axis=1)
+    df.drop(cols_to_drop, axis=1, inplace=True)
 
     # replace negative values with 1
     num = df._get_numeric_data()
