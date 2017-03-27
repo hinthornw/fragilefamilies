@@ -8,7 +8,7 @@ from sklearn.svm import SVC, LinearSVC
 from sklearn.linear_model import LogisticRegression, LassoLarsCV
 # from sklearn.metrics import roc_curve, auc
 # from sklearn.naive_bayes import BernoulliNB, MultinomialNB, GaussianNB
-from sklearn.model_selection import  GridSearchCV
+from sklearn.model_selection import  GridSearchCV, cross_val_score
 # from sklearn.neural_network import MLPClassifier
 # from sklearn.neighbors import KNeighborsClassifier
 # from sklearn.gaussian_process import GaussianProcessClassifier
@@ -18,9 +18,13 @@ from sklearn.ensemble import RandomForestRegressor, AdaBoostClassifier, ExtraTre
 # from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis
 from sklearn.pipeline import Pipeline
 from sklearn.feature_selection import SelectFromModel, VarianceThreshold,  RFECV
+from sklearn.random_projection import johnson_lindenstrauss_min_dim, GaussianRandomProjection
 from sklearn import linear_model, decomposition, preprocessing
 from minepy import MINE
 import sys
+
+global debug
+debug = False
 
 
 def select(background, train, train_label):
@@ -39,40 +43,55 @@ def select(background, train, train_label):
     subBackground = background.loc[background['idnum'].isin(subTrain['challengeID'])]
     #reverse check
     subTrain = subTrain.loc[subTrain['challengeID'].isin(subBackground['idnum'])]
+    subBackground = subBackground.sort_values(['idnum'], ascending=True)
+    subTrain = subTrain.sort_values(['challengeID'], ascending=True)
+
+    # if debug:
+    #
+    #     print "Background:"
+    #     print subBackground['idnum']
+    #     print "Targets"
+    #     print subTrain['challengeID']
     return subBackground, subTrain
 
-    def testModel(X_scaled, Y):
-        '''Test the current dataset using a number of regressors'''
-        regressors = {
-            linear_model.LinearRegression(),
-            linear_model.ElasticNet(),
-            RandomForestRegressor(n_estimators=40, verbose=True)
-        }
+def testModel(X_scaled, Y):
+    '''Test the current dataset using a number of regressors'''
 
-        names = {
-            'Linear',
-            'ElasticNet',
-            'RandomForest'
-        }
+    print "Baseline"
+    mean = np.full(len(Y), np.mean(Y))
+    print -np.sum((Y - mean) ** 2) / len(Y)
 
 
-        for (reg, name) in zip(regressors, names):
-            cross_val = cross_val_score(reg, X_scaled, Y, cv=5)
-            print '%s:\tcvs accuracy: %0.2f (+/- %0.2f) ' % (
-                name, cross_val.mean(), cross_val.std() * 2)  # mean & 95% conf interval for k-folds
+    regressors = {
+        linear_model.LinearRegression(),
+        linear_model.ElasticNet(alpha=0.06, l1_ratio=0.5), #from previous one
+        RandomForestRegressor(n_estimators=40, verbose=True)
+    }
+
+    names = {
+        'Linear',
+        'ElasticNet',
+        'RandomForest'
+    }
+
+    for (reg, name) in zip(regressors, names):
+        cross_val = cross_val_score(reg, X_scaled, Y, cv=5, scoring="neg_mean_squared_error")
+        print '%s:\tcvs accuracy: %0.2f (+/- %0.2f) ' % (
+            name, cross_val.mean(), cross_val.std() * 2)  # mean & 95% conf interval for k-folds
 
 def main(argv):
     #global train_background, train_outcomes
     # Process arguments
     path = ''
-    usage_message = 'Usage: \n python classifySentiment.py -p <path> -c <column> -v <varThresh> -f <feature>'
+    usage_message = 'Usage: \n python classifySentiment.py -p <path> -d <debug> -c <column> -v <varThresh> -f <feature>'
     inputf = "output.csv"
     train_label = 'gpa'
     varThresh = False
     univar = False
+    global debug
     try:
-        opts, args = getopt.getopt(argv, "p:c:v:u:f:",
-                                   ["path=", "column=", "varThresh=", "univar=", "feature="])
+        opts, args = getopt.getopt(argv, "p:d:c:v:u:f:",
+                                   ["path=", "debug=", "column=", "varThresh=", "univar=", "feature="])
     except getopt.GetoptError:
         print usage_message
         sys.exit(2)
@@ -82,6 +101,8 @@ def main(argv):
             sys.exit()
         elif opt in ("-p", "--path"):
             path = arg
+        elif opt in ("-d", "--debug"):
+            debug = True
         elif opt in ("-c", "--column"):
             train_label = arg
         elif opt in ("-v", "--varThresh"):
@@ -106,7 +127,8 @@ def main(argv):
     #Get the labels of the coefficients
     labels = X.axes[1][1:]
 
-    X = np.array(X)[:, 1:]
+    #first 2 inputs are id's...
+    X = np.array(X)[:, 2:]
     Y = np.array(Y)[:, 1:].ravel()
 
     preVarSize =  X.shape[1]
@@ -135,62 +157,99 @@ def main(argv):
         for i in alphas:
             a = i
             print "Trying alpha %f" % (a)
-            randomized_lasso = linear_model.RandomizedLasso(n_jobs=1, alpha=a, sample_fraction=0.5, verbose=True)
+            randomized_lasso = linear_model.RandomizedLasso(n_jobs=1, alpha=a, sample_fraction=0.25, verbose=True)
             randomized_lasso.fit(X_scaled, Y)
             scores = scores + randomized_lasso.scores_
-            print sorted(zip(map(lambda x: round(x, 6), randomized_lasso.scores_),
-                             labels), reverse=True)
+            for score, label in sorted(zip(map(lambda x: round(x, 6), randomized_lasso.scores_),
+                             labels), reverse=True):
+                if score > 0.0001:
+                    print "%s: %f" % (label, score)
 
         print "Average score for variable"
         scores = scores / len(alphas) # get mean values
         meanImportance = np.mean(scores)
-        keptIndices = np.where(np.array(clf.feature_importances_) > meanImportance)
-        for (score, label) in sorted(zip(scores,labels),key=lambda(score, label): score,  reverse=True):
-            print "%s: %f" % (label, score)
+        keptIndices = np.where(scores > 1.25 * meanImportance)
+        print "Top Scores for Random Lasso"
+        if debug:
+            for (score, label) in sorted(zip(scores,labels),key=lambda(score, label): score,  reverse=True):
+                if score > meanImportance:
+                    print "%s: %f" % (label, score)
         labels = labels[keptIndices]
         X_scaled = np.squeeze(X_scaled[:, keptIndices])
+        print "New size of X"
+        print X_scaled.shape
         return (X_scaled, Y, labels)
 
     #meh simple PCA reduction (not finished)
     def pcaReduce(X_scaled, Y, labels):
-        pca = decomposition.PCA()
+        pca = decomposition.PCA(svd_solver='randomized', n_components=min(X_scaled.shape))
         pca.fit(X_scaled)
         pca.transform(X_scaled)
-        pca.transform(labels)
+        i = np.identity(labels.shape[0])
+        coef = pca.transform(i)
+        labels = pd.DataFrame(coef, index=labels)
+        print "New size of X"
+        print X_scaled.shape
+        if debug:
+            print labels[:10]
+            print X_scaled[:10, :10]
         return (X_scaled, Y, labels)
+
+    def randomProject(X_scaled, Y, labels):
+        '''Conduct a Gaussian random projection using Johnson Lindnenstrauss min dimension'''
+        transformer = GaussianRandomProjection(eps = 0.1)
+        X_scaled = transformer.fit_transform(X_scaled)
+        #minDim = transformer.n_component_
+        print "Components" #% (minDim)
+        print X_scaled.shape
+        return (X_scaled, Y, labels)
+
+
 
 
     def extraTreesReduce(X_scaled, Y, labels):
         print "Reducing dimensionality through Extra Trees Regression"
-        clf = ExtraTreesRegressor(n_estimators=50, verbose=True)
+        clf = ExtraTreesRegressor(n_jobs=-1, n_estimators=50, verbose=True)
         clf = clf.fit(X_scaled, Y)
         meanImportance = np.mean(clf.feature_importances_)
         keptIndices = np.where(np.array(clf.feature_importances_) > meanImportance)
-        print clf.feature_importances_
+        print "Top Scores for Extra Trees"
+        if debug:
+            for thing in clf.feature_importances_:
+                if thing > meanImportance:
+                    print thing
+
         labels = labels[keptIndices]
         X_scaled = np.squeeze(X_scaled[:, keptIndices])
+        print "New size of X"
+        print X_scaled.shape
         return (X_scaled, Y, labels)
 
-    (X_scaled, Y, labels) = extraTreesReduce(X_scaled, Y, labels)
+    #(X_scaled, Y, labels) = randomProject(X_scaled, Y, labels)
+    #(X_scaled, Y, labels) = pcaReduce(X_scaled, Y, labels)
+    #(X_scaled, Y, labels) = extraTreesReduce(X_scaled, Y, labels)
     (X_scaled, Y, labels) = rLasso(X_scaled, Y, labels)
 
+    def elasticCVParamTuning(X_scaled, Y, labels):
+        print "Accuracy with Elastic Net"
+        elastic = linear_model.ElasticNetCV(random_state=42, cv=6, l1_ratio=[.1, .5, .7, .9, .95, .99, 1], n_jobs=-1)
+        elastic.fit(X_scaled, Y)
+        # print elastic.mse_path_
+        coef = np.array(elastic.coef_)
+        scores = zip(labels, coef)
+        print "CV Params"
+        print elastic.alpha_
+        print elastic.l1_ratio_
+        for (key, val) in sorted(scores, key=lambda t: abs(t[1]), reverse=True):
+            print "%s: %f" % (key, val)
 
-    print "Accuracy with Elastic Net"
-    elastic = linear_model.ElasticNetCV(random_state=42, cv=6, l1_ratio=[.1, .5, .7, .9, .95, .99, 1], n_jobs=-1)
-    elastic.fit(X_scaled, Y)
-    # print elastic.mse_path_
-    coef = np.array(elastic.coef_)
-    scores = zip(labels, coef)
-    print "CV Params"
-    print elastic.alpha_
-    print elastic.l1_ratio
-    for (key, val) in sorted(scores, key=lambda t: abs(t[1]), reverse=True):
-        print "%s: %f" % (key, val)
 
 
     testModel(X_scaled, Y)
     print "Exitting"
     exit()
+
+
     #Calculate the Maximal Information Coefficient
     if univar:
         m = MINE()
@@ -259,7 +318,7 @@ def main(argv):
     print "Complete"
     print "Fitting Extra Trees Regressor"
     trees = ExtraTreesRegressor(100).fit(X_scaled, Y)
-    print "Copmlete"
+    print "Complete"
     print "Getting F Regression for comparision"
     F, _ = f_regression(X_scaled, Y)
     print "complete"
