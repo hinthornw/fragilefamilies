@@ -1,101 +1,31 @@
-from ast import literal_eval as make_tuple
+# from ast import literal_eval as make_tuple
 import getopt
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 from sklearn.svm import SVC, LinearSVC
-from sklearn.cluster import KMeans
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import roc_curve, auc
-from sklearn.naive_bayes import BernoulliNB, MultinomialNB, GaussianNB
-from sklearn.model_selection import cross_val_score
-from sklearn.neural_network import MLPClassifier
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.gaussian_process import GaussianProcessClassifier
-from sklearn.gaussian_process.kernels import RBF
+# from sklearn.cluster import KMeans
+from sklearn.linear_model import LogisticRegression, LassoLarsCV
+# from sklearn.metrics import roc_curve, auc
+# from sklearn.naive_bayes import BernoulliNB, MultinomialNB, GaussianNB
+from sklearn.model_selection import  GridSearchCV
+# from sklearn.neural_network import MLPClassifier
+# from sklearn.neighbors import KNeighborsClassifier
+# from sklearn.gaussian_process import GaussianProcessClassifier
+# from sklearn.gaussian_process.kernels import RBF
 from sklearn.tree import DecisionTreeClassifier
-from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier
-from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis
+from sklearn.ensemble import RandomForestRegressor, AdaBoostClassifier, ExtraTreesRegressor
+# from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis
 from sklearn.pipeline import Pipeline
-from sklearn.feature_selection import SelectFromModel
-from sklearn import linear_model
-from sklearn import preprocessing
+from sklearn.feature_selection import SelectFromModel, VarianceThreshold,  RFECV
+from sklearn import linear_model, decomposition, preprocessing
+from minepy import MINE
 import sys
 
-#
-# train_bow = []
-# train_classes = []
-# test_bow = []
-# test_classes = []
-# vocab = []
-# outputf = 'out'
-# feature_select = False
-
-#
-# def eval_clf(clf, clf_type, num_folds):
-#     global train_bow, train_classes, test_bow, test_classes, vocab, outputf
-#
-#     # Fit classifier
-#     clf.fit(train_bow, train_classes)
-#
-#     cross_val = cross_val_score(clf, train_bow, train_classes, cv=num_folds)
-#     # Score classifier
-#     print clf_type
-#     print '\ttrain score: ' + str(clf.score(train_bow, train_classes))
-#     print '\ttest score: ' + str(clf.score(test_bow, test_classes))
-#     print '\tcvs accuracy: %0.2f (+/- %0.2f) ' % (
-#     cross_val.mean(), cross_val.std() * 2)  # mean & 95% conf interval for k-folds
-#     # Perform ROC calculations
-#     predictions = clf.predict(test_bow)
-#     (false_positive_rate, true_positive_rate, thresholds) = roc_curve(test_classes, predictions)
-#     roc_auc = auc(false_positive_rate, true_positive_rate)
-#
-#     # Create ROC plot
-#     plt.figure(1)
-#     plt.title('Receiver Operating Characteristic')
-#     plt.plot(false_positive_rate, true_positive_rate,
-#              label=clf_type + ' = {:0.2f}'.format(roc_auc))
-#     plt.legend(loc='lower right')
-#     plt.plot([0, 1], [0, 1], 'r--')
-#     plt.xlim([-0.1, 1.2])
-#     plt.ylim([-0.1, 1.2])
-#     plt.ylabel('True Positive Rate')
-#     plt.xlabel('False Positive Rate')
-#
-#     if clf_type == 'Logistic Regression':
-#         # Save important features for logit classifier
-#         if feature_select == False:
-#             clf_vocab = vocab
-#             clf_coef = clf.coef_[0]
-#         else:
-#             vocab_select = zip(vocab, clf.named_steps['feature_selection'].get_support())
-#             clf_vocab = [v for (v, s) in vocab_select if s]
-#             clf_coef = clf.named_steps['classification'].coef_[0]
-#         word_weights = zip(clf_vocab, clf_coef)
-#         word_weights.sort(key=lambda x: x[1])
-#         logit_coef_fname = ''
-#         if feature_select == False:
-#             logit_coef_fname = 'results/' + outputf + '_logit_coef.tsv'
-#         else:
-#             logit_coef_fname = 'results/' + outputf + '_feat_logit_coef.tsv'
-#         coef_file = open(logit_coef_fname, 'w')
-#         for word, weight in word_weights:
-#             coef_file.write('%s\t%f\n' % (word, weight))
-#         coef_file.close()
-#
-#         # Save important features from feature selection
-#         if feature_select:
-#             feat_coef = clf.named_steps['feature_selection'].estimator_.coef_[0]
-#             feat_vocab_coefs = zip(vocab, feat_coef)
-#             feat_vocab_coefs.sort(key=lambda x: x[1])
-#             top_feat_vocab_coefs = feat_vocab_coefs[:5] + feat_vocab_coefs[-5:]
-#             top_feat_vocab_coefs_file = open('results/' + outputf + '_feat_coef.tsv', 'w')
-#             for word, weight in top_feat_vocab_coefs:
-#                 top_feat_vocab_coefs_file.write('%s\t%f\n' % (word, weight))
-#             top_feat_vocab_coefs_file.close()
 
 def select(background, train, train_label):
-    '''train_label = e.g. materialHardship, eviction, all, etc.'''
+    ''' Selects the appropriate subests of features and targets s.t. there exit no N/A
+        train_label = e.g. materialHardship, eviction, all, etc.'''
     if train_label == 'all':
         subTrain = train
         subTrain.dropna(axis=0, subset=['gpa', 'grit', 'materialHardship', 'eviction', 'layoff', 'jobTraining'], inplace=True, how='all')
@@ -111,18 +41,38 @@ def select(background, train, train_label):
     subTrain = subTrain.loc[subTrain['challengeID'].isin(subBackground['idnum'])]
     return subBackground, subTrain
 
+    def testModel(X_scaled, Y):
+        '''Test the current dataset using a number of regressors'''
+        regressors = {
+            linear_model.LinearRegression(),
+            linear_model.ElasticNet(),
+            RandomForestRegressor(n_estimators=40, verbose=True)
+        }
+
+        names = {
+            'Linear',
+            'ElasticNet',
+            'RandomForest'
+        }
+
+
+        for (reg, name) in zip(regressors, names):
+            cross_val = cross_val_score(reg, X_scaled, Y, cv=5)
+            print '%s:\tcvs accuracy: %0.2f (+/- %0.2f) ' % (
+                name, cross_val.mean(), cross_val.std() * 2)  # mean & 95% conf interval for k-folds
 
 def main(argv):
-    global train_background, train_outcomes
-
+    #global train_background, train_outcomes
     # Process arguments
     path = ''
-    usage_message = 'Usage: \n python classifySentiment.py -p <path> -c <column> -f <feature>'
+    usage_message = 'Usage: \n python classifySentiment.py -p <path> -c <column> -v <varThresh> -f <feature>'
     inputf = "output.csv"
     train_label = 'gpa'
+    varThresh = False
+    univar = False
     try:
-        opts, args = getopt.getopt(argv, "p:w:f:",
-                                   ["path=", "wcthresh=", "feature="])
+        opts, args = getopt.getopt(argv, "p:c:v:u:f:",
+                                   ["path=", "column=", "varThresh=", "univar=", "feature="])
     except getopt.GetoptError:
         print usage_message
         sys.exit(2)
@@ -134,103 +84,227 @@ def main(argv):
             path = arg
         elif opt in ("-c", "--column"):
             train_label = arg
+        elif opt in ("-v", "--varThresh"):
+            varThresh = True
+            p = float(arg)
+        elif opt in ("-u", "--univar"):
+            univar = True
         elif opt in ("-f", "--feature"):
             if arg == 'True':
                 feature_select = True
 
     # Get preprocessed data
     bg = open(path + "/" + "imputed_" + inputf, 'r')
-    train_background = pd.read_csv(bg, low_memory=False)
+    X = pd.read_csv(bg, low_memory=False)
 
     oc =  open(path + "/train.csv", 'r')
-    train_outcomes = pd.read_csv(oc, low_memory=False)
+    Y = pd.read_csv(oc, low_memory=False)
 
-    #Select only challengeid's in train_outcomes
+    #Select only challengeid's in Y
     # drop all rows in background.csv that are not in train.csv
-    train_background, train_outcomes = select(train_background, train_outcomes, train_label)
+    X, Y = select(X, Y, train_label)
+    #Get the labels of the coefficients
+    labels = X.axes[1][1:]
 
-    reg = linear_model.Ridge(alpha = .5)
-    lasso = linear_model.Lasso()
-    #reg.fit(np.array(train_background)[:, 1:], np.array(train_outcomes)[:, 1:])
-    cross_val = cross_val_score(reg, np.array(train_background)[:, 1:], np.array(train_outcomes)[:, 1:], cv=5)
-    print 'Reg: \tcvs accuracy: %0.2f (+/- %0.2f) ' % (cross_val.mean(), cross_val.std() * 2)  # mean & 95% conf interval for k-folds
-    print cross_val_score
-    cross_val = cross_val_score(lasso, np.array(train_background)[:, 1:], np.array(train_outcomes)[:, 1:], cv=5)
-    print 'Lasso: \tcvs accuracy: %0.2f (+/- %0.2f) ' % (cross_val.mean(), cross_val.std() * 2)  # mean & 95% conf interval for k-folds
-    print cross_val_score
+    X = np.array(X)[:, 1:]
+    Y = np.array(Y)[:, 1:].ravel()
+
+    preVarSize =  X.shape[1]
+    X_scaled = preprocessing.scale(X)
+
+    #Optionally eliminate columns of low variance
+    if varThresh:
+        thresh = p * (1 - p)
+        sel = VarianceThreshold(threshold=thresh)
+        sel = sel.fit(X_scaled)
+        labels = labels[np.where(sel.get_support())]
+        print labels.shape
+        X_scaled = sel.transform(X)
+        X_scaled = preprocessing.scale(X_scaled) #rescale
+        postVarSize = X_scaled.shape[1]
+        print "Removed %d columns of Var < %f" % (preVarSize - postVarSize, thresh)
+        print "New size is (%d, %d)" % (X_scaled.shape[0], X_scaled.shape[1])
+
+
+
+    # Try a randomized lasso to pick most stable coefficients.
+    def rLasso(X_scaled, Y, labels):
+        print "Features sorted by their score for Randomized Lasso:"
+        scores = np.zeros(len(labels))
+        alphas = [0.003, 0.002, 0.001]#, 0.002]
+        for i in alphas:
+            a = i
+            print "Trying alpha %f" % (a)
+            randomized_lasso = linear_model.RandomizedLasso(n_jobs=1, alpha=a, sample_fraction=0.5, verbose=True)
+            randomized_lasso.fit(X_scaled, Y)
+            scores = scores + randomized_lasso.scores_
+            print sorted(zip(map(lambda x: round(x, 6), randomized_lasso.scores_),
+                             labels), reverse=True)
+
+        print "Average score for variable"
+        scores = scores / len(alphas) # get mean values
+        meanImportance = np.mean(scores)
+        keptIndices = np.where(np.array(clf.feature_importances_) > meanImportance)
+        for (score, label) in sorted(zip(scores,labels),key=lambda(score, label): score,  reverse=True):
+            print "%s: %f" % (label, score)
+        labels = labels[keptIndices]
+        X_scaled = np.squeeze(X_scaled[:, keptIndices])
+        return (X_scaled, Y, labels)
+
+    #meh simple PCA reduction (not finished)
+    def pcaReduce(X_scaled, Y, labels):
+        pca = decomposition.PCA()
+        pca.fit(X_scaled)
+        pca.transform(X_scaled)
+        pca.transform(labels)
+        return (X_scaled, Y, labels)
+
+
+    def extraTreesReduce(X_scaled, Y, labels):
+        print "Reducing dimensionality through Extra Trees Regression"
+        clf = ExtraTreesRegressor(n_estimators=50, verbose=True)
+        clf = clf.fit(X_scaled, Y)
+        meanImportance = np.mean(clf.feature_importances_)
+        keptIndices = np.where(np.array(clf.feature_importances_) > meanImportance)
+        print clf.feature_importances_
+        labels = labels[keptIndices]
+        X_scaled = np.squeeze(X_scaled[:, keptIndices])
+        return (X_scaled, Y, labels)
+
+    (X_scaled, Y, labels) = extraTreesReduce(X_scaled, Y, labels)
+    (X_scaled, Y, labels) = rLasso(X_scaled, Y, labels)
+
+
+    print "Accuracy with Elastic Net"
+    elastic = linear_model.ElasticNetCV(random_state=42, cv=6, l1_ratio=[.1, .5, .7, .9, .95, .99, 1], n_jobs=-1)
+    elastic.fit(X_scaled, Y)
+    # print elastic.mse_path_
+    coef = np.array(elastic.coef_)
+    scores = zip(labels, coef)
+    print "CV Params"
+    print elastic.alpha_
+    print elastic.l1_ratio
+    for (key, val) in sorted(scores, key=lambda t: abs(t[1]), reverse=True):
+        print "%s: %f" % (key, val)
+
+
+    testModel(X_scaled, Y)
+    print "Exitting"
+    exit()
+    #Calculate the Maximal Information Coefficient
+    if univar:
+        m = MINE()
+        def MIC(x):
+            m.compute_score(x, Y);
+            return m.mic()
+
+        newColumns = np.array(map(lambda x: MIC(x), X_scaled.T))
+        print "Conducting Univariate MIC Trimming"
+        toKeep = np.where(newColumns > 0.1)
+        X_scaled = X_scaled[:, toKeep]
+        labels = labels[toKeep]
+        newColumns = newColumns[toKeep]
+        scores= zip(labels, newColumns)
+        print "Sorted Scores"
+        print sorted(scores, key=lambda t: t[1], reverse=True)
+        X_scaled = np.squeeze(X_scaled)
+        print "New Shape"
+        print X_scaled.shape
+
+
+
+    exit()
+    #Try using PCA in a pipeline for unsupervised feature selection
+    print "Trying unsupervised PCA"
+    pca = decomposition.PCA()
+    pipe = Pipeline(steps=[('pca', pca), ('randomLasso', linear_model.RandomizedLasso())])
+    pca.fit(X_scaled)
+    plt.figure(1, figsize=(4, 3))
+    plt.clf()
+    plt.axes([.2, .2, .7, .7])
+    plt.plot(pca.explained_variance_, linewidth=2)
+    plt.axis('tight')
+    plt.xlabel('n_components')
+    plt.ylabel('explained_variance_')
+
+    print "Finding ideal number components with PCA"
+    n_components = [80, 160, 250, 500]
+    print "fitting LARS Regressor"
+    lars_cv = LassoLarsCV(cv=6).fit(X_scaled, Y)
+    print "Complete"
+    alphas = np.linspace(lars_cv.alphas_[0], 0.1 * lars_cv.alphas_[0], 6)
+    estimator = GridSearchCV(pipe,
+                             dict(pca__n_components=n_components, randomLasso__alpha=alphas))
+    estimator.fit(X_scaled, Y)
+    plt.axvline(estimator.best_estimator_.named_steps['pca'].n_components,
+                linestyle=':', label='n_components chosen')
+    plt.legend(prop=dict(size=12))
+    plt.show()
+    print "Grid Search CV results"
+    print estimator.best_params_
+    print estimator.best_estimator_
+
+
+
+
+    #Run a RandomizedLasso using paths going down to 0.1*alpha_max as in
+    #http://scikit-learn.org/stable/auto_examples/linear_model/plot_sparse_recovery.html
+    #get alphas from a least angle regression model
+    print "fitting LARS Regressor"
+    lars_cv = LassoLarsCV(cv=6).fit(X_scaled, Y)
+    print "Complete"
+    alphas = np.linspace(lars_cv.alphas_[0], 0.1 * lars_cv.alphas_[0], 6)
+    print "Training Randomized Lasso"
+    clf = linear_model.RandomizedLasso(alpha=alphas, random_state=42, sample_fraction=0.5, n_jobs=-1, verbose=True).fit(X_scaled, Y)
+    print "Complete"
+    print "Fitting Extra Trees Regressor"
+    trees = ExtraTreesRegressor(100).fit(X_scaled, Y)
+    print "Copmlete"
+    print "Getting F Regression for comparision"
+    F, _ = f_regression(X_scaled, Y)
+    print "complete"
+    print "Plotting ROC"
+    plt.figure()
+    for name, score in [('F-test', F),
+                        ('Stability selection', clf.scores_),
+                        ('Lasso coefs', np.abs(lars_cv.coef_)),
+                        ('Trees', trees.feature_importances_),
+                        ]:
+        precision, recall, thresholds = precision_recall_curve(coef != 0,
+                                                               score)
+        plt.semilogy(np.maximum(score / np.max(score), 1e-4),
+                     label="%s. AUC: %.3f" % (name, auc(recall, precision)))
+
+
+    plt.show()
+
+
+
+
+
+    # lassoLars.fit(X, Y)
+    # print 'LassoLars params'
+
+    # params = lassoLars.coef_
+    #
+    # for (i, j) in zip(params, xrange(len(params))):
+    #     if i > 0:
+    #         sys.stdout.write('%d ', j)
+    #
+    #
+    #
+    # print params
+    # print sum(params)
+
     # # print "background"
-    # # print np.array(train_background)[:, :]
+    # # print np.array(X)[:, :]
     # # print "Training"
     # # print np.array(train_outcomes)[:, :]
-    # reg.fit(np.array(train_background)[:, 1:], np.array(train_outcomes)[:, 1:])
+    # reg.fit(np.array(X)[:, 1:], np.array(train_outcomes)[:, 1:])
 
 
 
-    #
-    # vocabf = outputf + '_vocab_' + str(word_count_threshold) + '.txt'
-    # vocab_file = open(path + '/' + vocabf, 'r')
-    # vocab = [line.rstrip('\n') for line in vocab_file]
-    # if use_bigrams == True:
-    #     vocab = [make_tuple(v) for v in vocab]
-    #     vocab = [tuple(s.encode('utf8') for s in v) for v in vocab]
-    # vocab_file.close()
-    # train_bow = read_bagofwords_dat(path + '/' + outputf + '_bag_of_words_' + str(word_count_threshold) + '.csv',
-    #                                 tfidf=tfidf)
-    # train_classes = np.loadtxt(path + '/' + outputf + '_classes_' + str(word_count_threshold) + '.txt', dtype='int')
-    #
-    # # Process test data
-    # test_txt = path + "/test.txt"
-    # (test_docs, test_classes, test_samples) = tokenize_corpus(test_txt, train=False, use_bigrams=use_bigrams,
-    #                                                           use_stopwords=use_stopwords,
-    #                                                           use_punctuation=use_punctuation)
-    # test_classes = map(int, test_classes)
-    # test_bow = find_wordcounts(test_docs, vocab, tfidf=tfidf)
-    #
-    # # Te
-    # names = [
-    #     'Bernoulli Naive Bayes',
-    #     'Multinomial Naive Bayes',
-    #     'Logistic Regression',
-    #     'RBF kernel SVM',
-    #     'linear kernel SVM',
-    #     '2 Nearest Neighbors',
-    #     '4 Nearest Neighbors',
-    #     '8 Nearest Neighbors',
-    #     'Gaussian Naive Bayes',
-    #     'Gaussian Process',
-    #     'Random Forest',
-    #     'Multi-layer Perceptron',
-    #     'Quadratic Discriminant'
-    # ]
-    #
-    # classifiers = [
-    #     BernoulliNB(),
-    #     MultinomialNB(),
-    #     LogisticRegression(),
-    #     SVC(kernel='rbf'),
-    #     LinearSVC(),
-    #     KNeighborsClassifier(2),
-    #     KNeighborsClassifier(4),
-    #     KNeighborsClassifier(8),
-    #     GaussianNB(),
-    #     GaussianProcessClassifier(),
-    #     RandomForestClassifier(max_depth=10),
-    #     DecisionTreeClassifier(max_depth=10),
-    #     MLPClassifier(solver='lbfgs', max_iter=400),
-    #     QuadraticDiscriminantAnalysis()
-    # ]
-    #
-    # # Evaluate classifiers
-    # for clf, name, indx in zip(classifiers, names, range(len(classifiers))):
-    #     if feature_select:
-    #         eval_clf(Pipeline([
-    #             ('feature_selection', SelectFromModel(LinearSVC(loss='squared_hinge', penalty='l1', dual=False))),
-    #             ('classification', clf)
-    #         ]), name, indx, num_folds=nf, tfidf=tfidf)
-    #     else:
-    #         eval_clf(clf, name, indx, num_folds=nf, tfidf=tfidf)
-    #
-    # plt.show()
+
 
 
 if __name__ == "__main__":
