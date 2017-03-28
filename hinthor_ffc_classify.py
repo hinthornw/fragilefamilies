@@ -91,6 +91,7 @@ def main(argv):
     rForestSelect = False
     lassoSelect = False
     expandOhe = False
+    rec_Feature_Elimination = False
     global debug
     try:
         opts, args = getopt.getopt(argv, "p:i:d:c:v:u:f:s:l:j:e:o",
@@ -210,7 +211,7 @@ def main(argv):
             if debug:
                 for score, label in sorted(zip(map(lambda x: round(x, 6), randomized_lasso.scores_),
                                  labels), reverse=True):
-                    if score > 0.0001:
+                    if score > 0.015:
                         print "%s: %f" % (label, score)
 
         print "Average score for variable"
@@ -227,6 +228,44 @@ def main(argv):
         X_scaled = np.squeeze(X_scaled[:, keptIndices])
         print "New size of X"
         print X_scaled.shape
+        return (X_scaled, Y, labels)
+
+
+
+        # Try a randomized lasso to pick most stable coefficients.
+
+    def lasso_stability(X_scaled, Y, labels):
+        print "Features sorted by their stability score using lasso stability paths:"
+        if debug:
+            alpha_grid, scores_path = linear_model.lasso_stability_path(X_scaled, Y, n_jobs = -1, random_state=42,
+                                                       eps=0.05, sample_fraction=0.75, verbose=debug)
+            plt.figure(num=1)
+            #plot as a function of the alpha/alpha_max
+            variables = plt.plot(alpha_grid[1:] ** 0.333, scores_path.T[1:], 'k')
+            ymin, ymax = plt.ylim()
+            plt.xlabel(r'$(\alpha / \alpha_{max})^{1/3}$')
+            plt.ylabel('Stability score: proportion of times selected')
+            plt.title('Stability Scores Path')
+            plt.axis('tight')
+            plt.figure(num=2)
+            auc = (scores_path.dot(alpha_grid))
+            auc_plot = plt.plot((scores_path.dot(alpha_grid)))
+            plt.xlabel(r'Features')
+            plt.ylabel(r'Area under stability curve')
+            plt.title('Overall stability of features')
+            plt.show()
+            k = X_scaled.shape[1] / 100
+            print "Top %d performing features" % (k)
+            ind = np.argpartition(auc, -k)[-k:]
+            for (arg, value) in sorted(zip(labels[ind], auc[ind]), key=lambda (x, y): y, reverse=True):
+                print arg, value
+            labels = labels[ind]
+            X_scaled = X_scaled[:, ind]
+
+
+
+        else:
+            print 'Debug option not set, supress plotting'
         return (X_scaled, Y, labels)
 
     #simple PCA reduction (not finished) Distorts the labels
@@ -341,6 +380,7 @@ def main(argv):
     if rForestSelect:
         (X_scaled, Y, labels) = extraTreesReduce(X_scaled, Y, labels)
     if lassoSelect:
+        (X_scaled, Y, labels) = lasso_stability(X_scaled, Y, labels)
         (X_scaled, Y, labels) = rLasso(X_scaled, Y, labels)
 
 
