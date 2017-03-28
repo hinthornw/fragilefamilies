@@ -4,7 +4,7 @@ import getopt
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
-from sklearn.svm import SVC, LinearSVC
+from sklearn.svm import SVR
 # from sklearn.cluster import KMeans
 from sklearn.linear_model import LogisticRegression, LassoLarsCV
 # from sklearn.metrics import roc_curve, auc
@@ -18,11 +18,12 @@ from sklearn.tree import DecisionTreeClassifier
 from sklearn.ensemble import RandomForestRegressor, AdaBoostClassifier, ExtraTreesRegressor
 # from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis
 from sklearn.pipeline import Pipeline
-from sklearn.feature_selection import SelectFromModel, VarianceThreshold,  RFECV
+from sklearn.feature_selection import SelectFromModel, VarianceThreshold,  RFECV, RFE
 from sklearn.random_projection import johnson_lindenstrauss_min_dim, GaussianRandomProjection
 from sklearn import linear_model, decomposition, preprocessing
 from minepy import MINE
 import sys
+import re
 
 global debug
 debug = False
@@ -57,9 +58,10 @@ def select(background, train, train_label):
 
 def testModel(X_scaled, Y):
     '''Test the current dataset using a number of regressors'''
+    # Y = Y / np.max(Y)
     meanSquared = (Y - np.full(len(Y), np.mean(Y))) ** 2
     std = np.std(meanSquared)
-    print "Baseline Accuracy:\t %0.4f (+/- %0.4f)" % (-np.sum(meanSquared) / len(Y), std * 2)
+    print "Baseline Error:\t %0.4f (+/- %0.4f)" % (-np.sum(meanSquared) / len(Y), std * 2)
 
     print "Testing on %d features" % (X_scaled.shape[1])
 
@@ -71,7 +73,7 @@ def testModel(X_scaled, Y):
 
     for (name, reg) in regressors:
         cross_val = cross_val_score(reg, X_scaled, Y, cv=5, scoring="neg_mean_squared_error")
-        print '%s:\tcvs accuracy: %0.4f (+/- %0.4f) ' % (
+        print '%s:\tcvs Error: %0.4f (+/- %0.4f) ' % (
             name, cross_val.mean(), cross_val.std() * 2)  # mean & 95% conf interval for k-folds
 
 def main(argv):
@@ -79,7 +81,7 @@ def main(argv):
     # Process arguments
     path = ''
     usage_message = 'Usage: \n python classifySentiment.py -p <path> -i <inputfile> -s <pca> -l <randomLasso> -f <randomForest>' \
-                    ' -d <debug> -c <column> -v <varThresh> -j <randomProjections>'
+                    ' -d <debug> -c <column> -v <varThresh> -j <randomProjections>, -e <recFeatureElim> -o <oneHotEnc>'
     inputf = "output.csv"
     train_label = 'gpa'
     varThresh = False
@@ -88,10 +90,11 @@ def main(argv):
     rProjectSelect = False
     rForestSelect = False
     lassoSelect = False
+    expandOhe = False
     global debug
     try:
-        opts, args = getopt.getopt(argv, "p:i:d:c:v:u:f:s:l:j",
-                                   ["path=", "inputf=",  "column=", "varThresh=", "univar=",])
+        opts, args = getopt.getopt(argv, "p:i:d:c:v:u:f:s:l:j:e:o",
+                                   ["path=", "inputf=",  "column=", "varThresh=", "univar=", "rfe=", "oneHot="])
     except getopt.GetoptError:
         print usage_message
         sys.exit(2)
@@ -120,22 +123,53 @@ def main(argv):
             univar = True
         elif opt in ("-j", "--rProject"):
             rProjectSelect = True
+        elif opt in ("-e", "--rfe"):
+            rec_Feature_Elimination = True
+            num_feat = int(arg)
+        elif opt in ("o", "--onehot"):
+            expandOhe = True
 
-    # Get preprocessed data
+    # Get *preprocessed* data
     bg = open(path + "/" + "imputed_" + inputf, 'r')
     X = pd.read_csv(bg, low_memory=False)
-
     oc =  open(path + "/train.csv", 'r')
     Y = pd.read_csv(oc, low_memory=False)
+
+    # Remove redundant ID's (mother and father)
+    regex = re.compile('.*id[0-9].*')
+    mf_ids = []
+    for col in X.columns:
+        if regex.match(col):
+            mf_ids.append(col)
+    X.drop(mf_ids, axis=1, inplace=True)
+
+
 
     #Select only challengeid's in Y
     # drop all rows in background.csv that are not in train.csv
     X, Y = select(X, Y, train_label)
     #Get the labels of the coefficients
-    labels = X.axes[1][2:]
+    if not expandOhe:
+        labels = X.axes[1]
+    else:
+        #Separate based on type of data:
+        X_floats = X.select_dtypes(include=['float64'])
+        X_ints = X[X.columns.difference(['idnum'])].select_dtypes(include=['int64']).columns #leave out the 'idnum'
+
+        #Assume integer data is categorical, apply one-hot encoding
+        ohe = preprocessing.OneHotEncoder()
+        mins = np.min(X[X_ints])
+        X[X_ints] -= mins # OHE needs only nonnegative integers.
+        ohe.fit(X[X_ints])
+        print "Transforming OHE"
+        X_ints = ohe.transform(X[X_ints])
+        X = np.concatenate((X.as_matrix(columns=['idnum']), X_floats, X_ints.todense()), axis=1)
+        labels = np.full(X.shape[1], False, dtype=np.bool_)
+        print X.shape
+
 
     #first 2 inputs are id's...
-    X = np.array(X)[:, 2:]
+    X = np.array(X)
     Y = np.array(Y)[:, 1:].ravel()
 
     preVarSize =  X.shape[1]
@@ -147,8 +181,9 @@ def main(argv):
         X_scaled = X_scaled / (np.max(X_scaled, axis=0) + 0.001)
         sel = VarianceThreshold(threshold=thresh)
         sel = sel.fit(X_scaled)
-        labels = labels[np.where(sel.get_support())]
-        print labels.shape
+        if not expandOhe:
+            labels = labels[np.where(sel.get_support())]
+            print labels.shape
         X_scaled = sel.transform(X)
         X_scaled = preprocessing.scale(X_scaled)  # rescale
         postVarSize = X_scaled.shape[1]
@@ -164,7 +199,7 @@ def main(argv):
     # Try a randomized lasso to pick most stable coefficients.
     def rLasso(X_scaled, Y, labels):
         print "Features sorted by their score for Randomized Lasso:"
-        scores = np.zeros(len(labels))
+        scores = np.zeros(X_scaled.shape[1])
         alphas = [0.003, 0.002]#, 0.001]
         for i in alphas:
             a = i
@@ -187,13 +222,14 @@ def main(argv):
             for (score, label) in sorted(zip(scores,labels),key=lambda(score, label): score,  reverse=True):
                 if score > meanImportance:
                     print "%s: %f" % (label, score)
-        labels = labels[keptIndices]
+        if not expandOhe:
+            labels = labels[keptIndices]
         X_scaled = np.squeeze(X_scaled[:, keptIndices])
         print "New size of X"
         print X_scaled.shape
         return (X_scaled, Y, labels)
 
-    #meh simple PCA reduction (not finished) Distorts the labels
+    #simple PCA reduction (not finished) Distorts the labels
     def pcaReduce(X_scaled, Y, labels):
         print "Reduction via Principle Component"
         pca = decomposition.PCA(svd_solver='randomized', n_components=min(X_scaled.shape))
@@ -204,9 +240,9 @@ def main(argv):
         # i = np.identity(X_scaled.shape[1])
         # coef = pca.transform(i)
         # labels = pd.DataFrame(coef, index=labels)
-
         if debug:
-            print labels[:10]
+            if not expandOhe:
+                print labels[:10]
             print X_scaled[:10, :10]
         return (X_scaled, Y, labels)
 
@@ -235,7 +271,8 @@ def main(argv):
                 if thing > meanImportance:
                     print thing
 
-        labels = labels[keptIndices]
+        if not expandOhe:
+            labels = labels[keptIndices]
         X_scaled = np.squeeze(X_scaled[:, keptIndices])
         print "New size of X"
         print X_scaled.shape
@@ -244,18 +281,18 @@ def main(argv):
 
         # Calculate the Maximal Information Coefficient
 
-    if univar:
+    def univarSelect(X_scaled, Y, labels):
         m = MINE()
 
         def MIC(x):
             m.compute_score(x, Y);
             return m.mic()
-
         newColumns = np.array(map(lambda x: MIC(x), X_scaled.T))
         print "Conducting Univariate MIC Trimming"
         toKeep = np.where(newColumns > 0.1)
         X_scaled = X_scaled[:, toKeep]
-        labels = labels[toKeep]
+        if not expandOhe:
+            labels = labels[toKeep]
         newColumns = newColumns[toKeep]
         scores = zip(labels, newColumns)
         print "Sorted Scores"
@@ -263,9 +300,11 @@ def main(argv):
         X_scaled = np.squeeze(X_scaled)
         print "New Shape"
         print X_scaled.shape
+        return (X_scaled, Y, labels)
 
 
     def elasticCVParamTuning(X_scaled, Y, labels):
+        '''Use to get Elastic Net params for final predictor'''
         print "Accuracy with Elastic Net"
         elastic = linear_model.ElasticNetCV(random_state=42, cv=6, l1_ratio=[.1, .5, .7, .9, .95, .99, 1], n_jobs=-1)
         elastic.fit(X_scaled, Y)
@@ -278,10 +317,27 @@ def main(argv):
         for (key, val) in sorted(scores, key=lambda t: abs(t[1]), reverse=True):
             print "%s: %f" % (key, val)
 
+    def recFeatElim(X_scaled, Y, labels, model, num_feat):
+        n_features = X_scaled.shape[1]
+        rfe = RFE(estimator=model, n_features_to_select=num_feat, step=(n_features + num_feat)/200, verbose=debug)
+        rfe = rfe.fit(X_scaled, Y)
+        if debug:
+            print rfe.support_
+            print rfe.ranking_
+            print labels[np.argmin(rfe.ranking_)]
+        X_scaled = X_scaled[:, rfe.support_]
+        labels = labels[np.where(rfe.support_)]
+        return (X_scaled, Y, labels)
+
+    if univar:
+        (X_scaled, Y, labels) = univarSelect(X_scaled, Y, labels)
     if rProjectSelect:
         (X_scaled, Y, labels) = randomProject(X_scaled, Y, labels)
     if pcaSelect:
         (X_scaled, Y, labels) = pcaReduce(X_scaled, Y, labels)
+    if rec_Feature_Elimination:
+        (X_scaled, Y, labels) = recFeatElim(X_scaled, Y, labels,
+                                            SVR(kernel='linear'), num_feat)
     if rForestSelect:
         (X_scaled, Y, labels) = extraTreesReduce(X_scaled, Y, labels)
     if lassoSelect:
@@ -291,106 +347,6 @@ def main(argv):
     testModel(X_scaled, Y)
     print "Exitting"
     exit()
-
-
-
-
-
-
-    exit()
-
-
-    # #Try using PCA in a pipeline for unsupervised feature selection
-    # print "Trying unsupervised PCA"
-    # pca = decomposition.PCA()
-    # pipe = Pipeline(steps=[('pca', pca), ('randomLasso', linear_model.RandomizedLasso())])
-    # pca.fit(X_scaled)
-    # plt.figure(1, figsize=(4, 3))
-    # plt.clf()
-    # plt.axes([.2, .2, .7, .7])
-    # plt.plot(pca.explained_variance_, linewidth=2)
-    # plt.axis('tight')
-    # plt.xlabel('n_components')
-    # plt.ylabel('explained_variance_')
-    #
-    # print "Finding ideal number components with PCA"
-    # n_components = [80, 160, 250, 500]
-    # print "fitting LARS Regressor"
-    # lars_cv = LassoLarsCV(cv=6).fit(X_scaled, Y)
-    # print "Complete"
-    # alphas = np.linspace(lars_cv.alphas_[0], 0.1 * lars_cv.alphas_[0], 6)
-    # estimator = GridSearchCV(pipe,
-    #                          dict(pca__n_components=n_components, randomLasso__alpha=alphas))
-    # estimator.fit(X_scaled, Y)
-    # plt.axvline(estimator.best_estimator_.named_steps['pca'].n_components,
-    #             linestyle=':', label='n_components chosen')
-    # plt.legend(prop=dict(size=12))
-    # plt.show()
-    # print "Grid Search CV results"
-    # print estimator.best_params_
-    # print estimator.best_estimator_
-
-
-
-
-    # #Run a RandomizedLasso using paths going down to 0.1*alpha_max as in
-    # #http://scikit-learn.org/stable/auto_examples/linear_model/plot_sparse_recovery.html
-    # #get alphas from a least angle regression model
-    # print "fitting LARS Regressor"
-    # lars_cv = LassoLarsCV(cv=6).fit(X_scaled, Y)
-    # print "Complete"
-    # alphas = np.linspace(lars_cv.alphas_[0], 0.1 * lars_cv.alphas_[0], 6)
-    # print "Training Randomized Lasso"
-    # clf = linear_model.RandomizedLasso(alpha=alphas, random_state=42, sample_fraction=0.5, n_jobs=-1, verbose=True).fit(X_scaled, Y)
-    # print "Complete"
-    # print "Fitting Extra Trees Regressor"
-    # trees = ExtraTreesRegressor(100).fit(X_scaled, Y)
-    # print "Complete"
-    # print "Getting F Regression for comparision"
-    # F, _ = f_regression(X_scaled, Y)
-    # print "complete"
-    # print "Plotting ROC"
-    # plt.figure()
-    # for name, score in [('F-test', F),
-    #                     ('Stability selection', clf.scores_),
-    #                     ('Lasso coefs', np.abs(lars_cv.coef_)),
-    #                     ('Trees', trees.feature_importances_),
-    #                     ]:
-    #     precision, recall, thresholds = precision_recall_curve(coef != 0,
-    #                                                            score)
-    #     plt.semilogy(np.maximum(score / np.max(score), 1e-4),
-    #                  label="%s. AUC: %.3f" % (name, auc(recall, precision)))
-    #
-    #
-    # plt.show()
-    #
-
-
-
-
-    # lassoLars.fit(X, Y)
-    # print 'LassoLars params'
-
-    # params = lassoLars.coef_
-    #
-    # for (i, j) in zip(params, xrange(len(params))):
-    #     if i > 0:
-    #         sys.stdout.write('%d ', j)
-    #
-    #
-    #
-    # print params
-    # print sum(params)
-
-    # # print "background"
-    # # print np.array(X)[:, :]
-    # # print "Training"
-    # # print np.array(train_outcomes)[:, :]
-    # reg.fit(np.array(X)[:, 1:], np.array(train_outcomes)[:, 1:])
-
-
-
-
 
 
 if __name__ == "__main__":
