@@ -34,32 +34,54 @@ def select(background, train, train_label):
         train_label = e.g. materialHardship, eviction, all, etc.'''
     if train_label == 'all':
         subTrain = train
+        # ind = pd.isnull(subTrain).all(1).nonzero()[0]
+        # subTest = subTrain.loc[ind, :]
         subTrain.dropna(axis=0, subset=['gpa', 'grit', 'materialHardship', 'eviction', 'layoff', 'jobTraining'], inplace=True, how='all')
     else:
         #subTrain = train[['challengeID', train_label]]
         subTrain = train.loc[:, ('challengeID', train_label)]
+        # ind = pd.isnull(subTrain).any(1).nonzero()[0]
+        # subTest = subTrain.loc[ind, :]
         subTrain.dropna(axis=0, subset=[train_label], inplace=True, how='all')
 
-    #subBackground = select x in backgroun s.t  background['idnum'] in subTrain['challengeID']
-    #select idnum in features that have a match in training labels
-    subBackground = background.loc[background['idnum'].isin(subTrain['challengeID'])]
+    #subBackground = select x in backgroun s.t  background['challengeID'] in subTrain['challengeID']
+    #select challengeID in features that have a match in training labels
+    subBackground = background.loc[background['challengeID'].isin(subTrain['challengeID'])]
+    backTest = background.loc[~background['challengeID'].isin(subTrain['challengeID'])]
     #reverse check
-    subTrain = subTrain.loc[subTrain['challengeID'].isin(subBackground['idnum'])]
-    subBackground = subBackground.sort_values(['idnum'], ascending=True)
+    subTrain = subTrain.loc[subTrain['challengeID'].isin(subBackground['challengeID'])]
+    subBackground = subBackground.sort_values(['challengeID'], ascending=True)
     subTrain = subTrain.sort_values(['challengeID'], ascending=True)
+    subTest = pd.concat([background['challengeID'],background['challengeID'], pd.Series(np.nan)], axis=1, keys=['challengeID1', 'challengeID', train_label])
+    subTrainBroad = subTrain.set_index('challengeID')
+    subTest = subTest.set_index('challengeID1')
+    print subTest.shape
+    print sorted(subTest['challengeID'], reverse=True)
+    subTest.update(subTrainBroad, join='left', overwrite=True)
+    print subTest.shape
 
+    # for indx, row in subTrain.iterrows():
+    #     subTest.loc[subTest['challengeID'] == row['challengeID']][train_label] = row[train_label]
+
+    # print subTest.shape
+    # print subTest
+    if debug:
+        print "original shape"
+        print sorted(subTest['challengeID'], reverse=True)
+    print "ba drop"
+    print subTest.shape
+    subTest = subTest[pd.isnull(subTest[train_label])]
+    subTest = subTest.sort_values(['challengeID'], ascending=True)
     # if debug:
-    #
-    #     print "Background:"
-    #     print subBackground['idnum']
-    #     print "Targets"
-    #     print subTrain['challengeID']
-    return subBackground, subTrain
+    #     print subTest
+    #     print subBackground
+    print subTest.shape
+    return subBackground, subTrain, backTest, subTest
 
 def testModel(X_scaled, Y):
     '''Test the current dataset using a number of regressors'''
     # Y = Y / np.max(Y)
-    meanSquared = (Y - np.full(len(Y), np.mean(Y))) ** 2
+    meanSquared = (Y[:, 1] - np.full(len(Y[:, 1]), np.mean(Y[:, 1]))) ** 2
     std = np.std(meanSquared)
     print "Baseline Error:\t %0.4f (+/- %0.4f)" % (-np.sum(meanSquared) / len(Y), std * 2)
 
@@ -67,21 +89,42 @@ def testModel(X_scaled, Y):
 
     regressors = {
         ('linear', linear_model.LinearRegression()),
-        ('ElasticNet', linear_model.ElasticNet(alpha=0.5, l1_ratio=0.5)), #from previous one
+        ('ElasticNet', linear_model.ElasticNet(alpha=0.3, l1_ratio=0.1)), #from previous one
         ('RandomForest', RandomForestRegressor(n_jobs=-1, n_estimators=40, verbose=True))
     }
 
     for (name, reg) in regressors:
-        cross_val = cross_val_score(reg, X_scaled, Y, cv=5, scoring="neg_mean_squared_error")
+        cross_val = cross_val_score(reg, X_scaled, Y[:, 1], cv=5, scoring="neg_mean_squared_error")
         print '%s:\tcvs Error: %0.4f (+/- %0.4f) ' % (
             name, cross_val.mean(), cross_val.std() * 2)  # mean & 95% conf interval for k-folds
+
+def predictScores(X_scaled, Y, X_test, Y_test, test_label):
+    reg = linear_model.ElasticNet(alpha=0.3, l1_ratio=0.1)
+    print "Predicting Scores"
+    reg.fit(X_scaled, Y[:, 1])
+    predictions = reg.predict(X_test)
+    print Y[0]
+    print Y_test[0]
+    print Y.shape
+    print Y_test.shape
+    # for (id, prediction) in zip(Y_test[:, 0], predictions):
+    #     print id, prediction
+
+    Y_test[:, 1] = predictions
+    Y_test = pd.DataFrame(Y_test)
+    Y_test.update(Y, join='left', overwrite=False)
+    outputf = open('./ffc/' + test_label + '_guessed.csv', 'w')
+    Y_test.to_csv(outputf, index=False, float_format='%10.5f')
+    # np.savetxt('./ffc/' + test_label + '_guessed.csv', Y_test, delimiter=",", fmt='%10.5f')
+
 
 def main(argv):
     #global train_background, train_outcomes
     # Process arguments
     path = ''
     usage_message = 'Usage: \n python classifySentiment.py -p <path> -i <inputfile> -s <pca> -l <randomLasso> -f <randomForest>' \
-                    ' -d <debug> -c <column> -v <varThresh> -j <randomProjections>, -e <recFeatureElim> -o <oneHotEnc>'
+                    ' -d <debug> -c <column> -v <varThresh> -j <randomProjections>, -e <recFeatureElim> -o <oneHotEnc>' \
+                    '-m <minimize>, -Q <squash>'
     inputf = "output.csv"
     train_label = 'gpa'
     varThresh = False
@@ -92,9 +135,12 @@ def main(argv):
     lassoSelect = False
     expandOhe = False
     rec_Feature_Elimination = False
+    scaleY = False
+    num_feat = 500
+    parr = False
     global debug
     try:
-        opts, args = getopt.getopt(argv, "p:i:d:c:v:u:f:s:l:j:e:o",
+        opts, args = getopt.getopt(argv, "p:i:d:c:v:u:f:s:l:j:e:o:m:Q",
                                    ["path=", "inputf=",  "column=", "varThresh=", "univar=", "rfe=", "oneHot="])
     except getopt.GetoptError:
         print usage_message
@@ -127,14 +173,19 @@ def main(argv):
         elif opt in ("-e", "--rfe"):
             rec_Feature_Elimination = True
             num_feat = int(arg)
-        elif opt in ("o", "--onehot"):
+        elif opt in ("-o", "--onehot"):
             expandOhe = True
+        elif opt in ("-m", "--minimize"): #standardize the output vector
+            scaleY = True
+        elif opt in ("-Q", "--squash"):
+            parr = True
 
     # Get *preprocessed* data
     bg = open(path + "/" + "imputed_" + inputf, 'r')
     X = pd.read_csv(bg, low_memory=False)
     oc =  open(path + "/train.csv", 'r')
     Y = pd.read_csv(oc, low_memory=False)
+
 
     # Remove redundant ID's (mother and father)
     regex = re.compile('.*id[0-9].*')
@@ -143,35 +194,66 @@ def main(argv):
         if regex.match(col):
             mf_ids.append(col)
     X.drop(mf_ids, axis=1, inplace=True)
-
+    X.drop(labels=['idnum'], axis=1, inplace=True)
+    # print sorted(X['challengeID'])
 
 
     #Select only challengeid's in Y
     # drop all rows in background.csv that are not in train.csv
-    X, Y = select(X, Y, train_label)
+    X, Y, X_test, Y_test = select(X, Y, train_label)
+
+    if debug:
+        print "Original sizes"
+        print X.shape
+        print X_test.shape
+        print Y.shape
+        print Y_test.shape
+    if scaleY:
+        Y = preprocessing.scale(Y)
+        print "SCALING Y"
+        # Y = preprocessing.scale(Y_test)
+
     #Get the labels of the coefficients
     if not expandOhe:
         labels = X.axes[1]
     else:
         #Separate based on type of data:
+        #First row bind the items
+        if debug:
+            print "Train and test shapes pre OHE"
+            print X.shape
+            print X_test.shape
+        length = X.shape[0]
         X_floats = X.select_dtypes(include=['float64'])
-        X_ints = X[X.columns.difference(['idnum'])].select_dtypes(include=['int64']).columns #leave out the 'idnum'
+        X_test_floats = X_test.select_dtypes(include=['float64'])
+        X_ints = X[X.columns.difference(['challengeID'])].select_dtypes(include=['int64']) #leave out the 'challengeID'
+        X_test_ints = X_test[X_test.columns.difference(['challengeID'])].select_dtypes(include=['int64'])
 
         #Assume integer data is categorical, apply one-hot encoding
         ohe = preprocessing.OneHotEncoder()
-        mins = np.min(X[X_ints])
-        X[X_ints] -= mins # OHE needs only nonnegative integers.
-        ohe.fit(X[X_ints])
+        X_full = np.concatenate((X, X_test), axis=0)
+        X_full_ints = np.concatenate((X_ints, X_test_ints), axis=0)
+        X_full_floats = np.concatenate((X_floats, X_test_floats), axis=0)
+        mins = np.min(X_full_ints)
+        X_full_ints -= mins # OHE needs only nonnegative integers.
+        ohe.fit(X_full_ints)
         print "Transforming OHE"
-        X_ints = ohe.transform(X[X_ints])
-        X = np.concatenate((X.as_matrix(columns=['idnum']), X_floats, X_ints.todense()), axis=1)
-        labels = np.full(X.shape[1], False, dtype=np.bool_)
-        print X.shape
+        X_full_ints = ohe.transform(X_full_ints)
+        X_full = np.concatenate((X_full_floats, X_full_ints.todense()), axis=1)
+        X, X_test = np.split(X_full, [length], axis=0)
+        #Split into the appropriate sets
+        if debug:
+            print "Train and test shapes post OHE"
+            print X.shape
+            print X_test.shape
+        labels = np.arange(X.shape[1])
 
 
     #first 2 inputs are id's...
     X = np.array(X)
-    Y = np.array(Y)[:, 1:].ravel()
+    Y = np.array(Y)
+    X_test = np.array(X_test)
+    Y_test = np.array(Y_test)
 
     preVarSize =  X.shape[1]
 
@@ -182,23 +264,40 @@ def main(argv):
         X_scaled = X_scaled / (np.max(X_scaled, axis=0) + 0.001)
         sel = VarianceThreshold(threshold=thresh)
         sel = sel.fit(X_scaled)
-        if not expandOhe:
-            labels = labels[np.where(sel.get_support())]
-            print labels.shape
         X_scaled = sel.transform(X)
         X_scaled = preprocessing.scale(X_scaled)  # rescale
+        if debug:
+            print "X's Size pre fit"
+            print X_scaled.shape
+            print X_test.shape
+            print "Y's Size prefit"
+            print Y.shape
+            print Y_test.shape
+        X_test = sel.transform(X_test)
+        if debug:
+            print "New X_test"
+            print X_test.shape
+        X_test = preprocessing.scale(X_test)
+        labels = labels[np.where(sel.get_support())]
+        if debug:
+            if labels.shape[0] != X_scaled.shape[1]:
+                print "labels wrong shape"
+                print labels.shape
         postVarSize = X_scaled.shape[1]
+        if X_scaled.shape[1] != X_test.shape[1]:
+            print "Error Scaling Variances"
         print "Removed %d columns of Var < %f" % (preVarSize - postVarSize, thresh)
         print "New size is (%d, %d)" % (X_scaled.shape[0], X_scaled.shape[1])
     else:
         X_scaled = preprocessing.scale(X)
+        X_test = preprocessing.scale(X_test)
 
 
 
 
 
     # Try a randomized lasso to pick most stable coefficients.
-    def rLasso(X_scaled, Y, labels):
+    def rLasso(X_scaled, Y, labels, X_test):
         print "Features sorted by their score for Randomized Lasso:"
         scores = np.zeros(X_scaled.shape[1])
         alphas = [0.003, 0.002]#, 0.001]
@@ -206,7 +305,9 @@ def main(argv):
             a = i
             print "Trying alpha %f" % (a)
             randomized_lasso = linear_model.RandomizedLasso(n_jobs=1, alpha=a, sample_fraction=0.25, verbose=True)
-            randomized_lasso.fit(X_scaled, Y)
+            print X_scaled.shape
+            print Y.shape
+            randomized_lasso.fit(X_scaled, Y[:, 1])
             scores = scores + randomized_lasso.scores_
             if debug:
                 for score, label in sorted(zip(map(lambda x: round(x, 6), randomized_lasso.scores_),
@@ -217,28 +318,30 @@ def main(argv):
         print "Average score for variable"
         scores = scores / len(alphas) # get mean values
         meanImportance = np.mean(scores)
-        keptIndices = np.where(scores > 1.25 * meanImportance)
+        keptIndices = np.where(scores > 1.15 * meanImportance)
         print "Top Scores for Random Lasso"
         if debug:
             for (score, label) in sorted(zip(scores,labels),key=lambda(score, label): score,  reverse=True):
                 if score > meanImportance:
                     print "%s: %f" % (label, score)
-        if not expandOhe:
-            labels = labels[keptIndices]
+
+        labels = labels[keptIndices]
         X_scaled = np.squeeze(X_scaled[:, keptIndices])
+        X_test = np.squeeze(X_test[:, keptIndices])
         print "New size of X"
         print X_scaled.shape
-        return (X_scaled, Y, labels)
+        return (X_scaled, Y, labels, X_test)
 
 
 
         # Try a randomized lasso to pick most stable coefficients.
 
-    def lasso_stability(X_scaled, Y, labels):
+    def lasso_stability(X_scaled, Y, labels, X_test):
         print "Features sorted by their stability score using lasso stability paths:"
         if debug:
-            alpha_grid, scores_path = linear_model.lasso_stability_path(X_scaled, Y, n_jobs = -1, random_state=42,
-                                                       eps=0.05, sample_fraction=0.75, verbose=debug)
+            print X_scaled.shape
+            alpha_grid, scores_path = linear_model.lasso_stability_path(X_scaled, Y[:, 1], n_jobs = -1, random_state=42,
+                                                       eps=0.05, sample_fraction=0.50, verbose=debug)
             plt.figure(num=1)
             #plot as a function of the alpha/alpha_max
             variables = plt.plot(alpha_grid[1:] ** 0.333, scores_path.T[1:], 'k')
@@ -254,28 +357,39 @@ def main(argv):
             plt.ylabel(r'Area under stability curve')
             plt.title('Overall stability of features')
             plt.show()
-            k = X_scaled.shape[1] / 100
+            if X_scaled.shape[1] > 200:
+                k = X_scaled.shape[1] / 100
+            else:
+                k = X_scaled.shape[1] / 10
             print "Top %d performing features" % (k)
             ind = np.argpartition(auc, -k)[-k:]
             for (arg, value) in sorted(zip(labels[ind], auc[ind]), key=lambda (x, y): y, reverse=True):
                 print arg, value
-            labels = labels[ind]
-            X_scaled = X_scaled[:, ind]
-
-
+            print ind
+            print np.where(ind)
+            labels = labels[np.where(ind)]
+            X_scaled = np.squeeze(X_scaled[:, np.where(ind)])
+            X_test = np.squeeze(X_test[:, np.where(ind)])
 
         else:
             print 'Debug option not set, supress plotting'
-        return (X_scaled, Y, labels)
+        return (X_scaled, Y, labels, X_test)
 
     #simple PCA reduction (not finished) Distorts the labels
-    def pcaReduce(X_scaled, Y, labels):
+    def pcaReduce(X_scaled, Y, labels, X_test):
         print "Reduction via Principle Component"
-        pca = decomposition.PCA(svd_solver='randomized', n_components=min(X_scaled.shape))
+        pca = decomposition.PCA(svd_solver='randomized', n_components=X_scaled.shape[1]/2)
         pca.fit(X_scaled)
-        pca.transform(X_scaled)
-        print "New size of X"
-        print X_scaled.shape
+        if debug:
+            print "Old Size of X"
+            print X_scaled.shape
+            print X_test.shape
+        X_scaled = pca.transform(X_scaled)
+        X_test = pca.transform(X_test)
+        if debug:
+            print "New size of X & X_test"
+            print X_scaled.shape
+            print X_test.shape
         # i = np.identity(X_scaled.shape[1])
         # coef = pca.transform(i)
         # labels = pd.DataFrame(coef, index=labels)
@@ -283,7 +397,8 @@ def main(argv):
             if not expandOhe:
                 print labels[:10]
             print X_scaled[:10, :10]
-        return (X_scaled, Y, labels)
+        labels = np.arange(X_scaled.shape[1]) # just serve as indices now
+        return (X_scaled, Y, labels, X_test)
 
     def randomProject(X_scaled, Y, labels):
         '''Conduct a Gaussian random projection using Johnson Lindnenstrauss min dimension'''
@@ -296,18 +411,16 @@ def main(argv):
         return (X_scaled, Y, labels)
 
 
-
-
     def extraTreesReduce(X_scaled, Y, labels):
         print "Reducing dimensionality through Extra Trees Regression"
         clf = ExtraTreesRegressor(n_jobs=-1, n_estimators=50, verbose=True)
-        clf = clf.fit(X_scaled, Y)
+        clf = clf.fit(X_scaled, Y[:, 1])
         meanImportance = np.mean(clf.feature_importances_)
-        keptIndices = np.where(np.array(clf.feature_importances_) > meanImportance)
+        keptIndices = np.where(np.array(clf.feature_importances_) > 1.15 * meanImportance)
         print "Top Scores for Extra Trees"
         if debug:
             for thing in clf.feature_importances_:
-                if thing > meanImportance:
+                if thing > 1.50 * meanImportance:
                     print thing
 
         if not expandOhe:
@@ -345,7 +458,7 @@ def main(argv):
     def elasticCVParamTuning(X_scaled, Y, labels):
         '''Use to get Elastic Net params for final predictor'''
         print "Accuracy with Elastic Net"
-        elastic = linear_model.ElasticNetCV(random_state=42, cv=6, l1_ratio=[.1, .5, .7, .9, .95, .99, 1], n_jobs=-1)
+        elastic = linear_model.ElasticNetCV(random_state=42, cv=6, l1_ratio=[0.01, .1, .5, .7, .9, .95, .99, 1], n_jobs=-1)
         elastic.fit(X_scaled, Y)
         # print elastic.mse_path_
         coef = np.array(elastic.coef_)
@@ -353,14 +466,16 @@ def main(argv):
         print "CV Params"
         print elastic.alpha_
         print elastic.l1_ratio_
-        for (key, val) in sorted(scores, key=lambda t: abs(t[1]), reverse=True):
-            print "%s: %f" % (key, val)
+        if debug:
+            for (key, val) in sorted(scores, key=lambda t: abs(t[1]), reverse=True)[:20]:
+                print "%s: %f" % (key, val)
 
-    def recFeatElim(X_scaled, Y, labels, model, num_feat):
+    def recFeatElim(X_scaled, Y, labels, model, num_feat=500):
         n_features = X_scaled.shape[1]
-        rfe = RFE(estimator=model, n_features_to_select=num_feat, step=(n_features + num_feat)/200, verbose=debug)
+        rfe = RFE(estimator=model, n_features_to_select=num_feat, step=300, verbose=debug)
         rfe = rfe.fit(X_scaled, Y)
         if debug:
+            print "Recursive Feature Elimination Values"
             print rfe.support_
             print rfe.ranking_
             print labels[np.argmin(rfe.ranking_)]
@@ -368,23 +483,54 @@ def main(argv):
         labels = labels[np.where(rfe.support_)]
         return (X_scaled, Y, labels)
 
+
     if univar:
         (X_scaled, Y, labels) = univarSelect(X_scaled, Y, labels)
+    if pcaSelect:
+        (X_scaled, Y, labels, X_test) = pcaReduce(X_scaled, Y, labels, X_test)
     if rProjectSelect:
         (X_scaled, Y, labels) = randomProject(X_scaled, Y, labels)
-    if pcaSelect:
-        (X_scaled, Y, labels) = pcaReduce(X_scaled, Y, labels)
-    if rec_Feature_Elimination:
-        (X_scaled, Y, labels) = recFeatElim(X_scaled, Y, labels,
-                                            SVR(kernel='linear'), num_feat)
-    if rForestSelect:
-        (X_scaled, Y, labels) = extraTreesReduce(X_scaled, Y, labels)
-    if lassoSelect:
-        (X_scaled, Y, labels) = lasso_stability(X_scaled, Y, labels)
-        (X_scaled, Y, labels) = rLasso(X_scaled, Y, labels)
 
+    # testModel(X_scaled, Y)
+    X_full = np.arange(1)
+    labels_parr = np.arange(1)
+    if lassoSelect:
+        if parr and pcaSelect:
+            X_full = np.copy(X_scaled)
+            (X_parr, Y, labels_parr, X_test) = lasso_stability(X_scaled, Y, labels, X_test)
+            (X_parr, Y, labels_parr, X_test) = rLasso(X_parr, Y, labels_parr, X_test)
+        else:
+            (X_scaled, Y, labels, X_test) = lasso_stability(X_scaled, Y, labels, X_test)
+            (X_scaled, Y, labels, X_test) = rLasso(X_scaled, Y, labels, X_test)
 
     testModel(X_scaled, Y)
+    if rForestSelect:
+        (X_scaled, Y, labels) = extraTreesReduce(X_scaled, Y, labels)
+    if rec_Feature_Elimination:
+        (X_scaled, Y, labels) = recFeatElim(X_scaled, Y, labels,
+                                            RandomForestRegressor(), num_feat)
+    if parr and pcaSelect:
+        #Add variables selected by recFeatElim to lasso select
+        X_scaled =X_full[:, np.unique(np.concatenate([labels, labels_parr]))]
+
+
+    #elasticCVParamTuning(X_scaled, Y, labels)
+    testModel(X_scaled, Y)
+    # print labels
+    # if expandOhe or pcaSelect:
+    #     print X_test.shape
+    #     X_test = X_test[:, labels]
+    #     print X_test.shape
+    #     print X_test
+    # else:
+    #     X_test = X_test[:, labels] #need to figure how to use textual labels
+
+    print "Dimensions"
+    print X_scaled.shape
+    print Y.shape
+    print X_test.shape
+    print Y_test.shape
+    predictScores(X_scaled, Y, X_test, Y_test, train_label)
     print "Exitting"
     exit()
 
